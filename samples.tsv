@@ -1,0 +1,3 @@
+sample	field_number	fq1	fq2
+S32	16N0006	data/16N0006_S32_L001_R1.fastq.gz	data/16N0006_S32_L001_R2.fastq.gz
+S20	98N2022	data/98N2022_S20_L001_R1.fastq.gz	data/98N2022_S20_L001_R2.fastq.gz

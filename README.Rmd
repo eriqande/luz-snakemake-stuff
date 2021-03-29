@@ -46,7 +46,7 @@ Here are the goals for these data:
 trimmed reads to the genome, since we might compare the results from those two
 paths in the pipeline.
 
-# How shall we thinking about this?
+# How shall we start thinking about this?
 
 As I am wont to do, I think it is best to start this process by just trying to
 get the basic Snakemake logic down, without necessarily getting lost in the weeds
@@ -76,7 +76,7 @@ We see that there are constant, and also different parts of the file names.
 The constant parts are `_L001_` and `.fastq.gz`.  The parts that vary are related
 to the samples of the samples or the names of the reads (`R1` of `R2`).
 
-Or, if we wanted to be different, we could say that `L001_R1` is the constant part
+Or, if we wanted to be different, we could say that `_L001_R` is the constant part
 and 1, or 2 varies.  (It turns out this will have some advantages later...)
 
 The other thing that we note is that things like `16N0006_S32` are sort of hard to look at.
@@ -88,17 +88,23 @@ defining them something like this:
 ```
 sample    field_number    fq1                                    fq2
 S32       16N0006         data/16N0006_S32_L001_R1.fastq.gz      data/16N0006_S32_L001_R2.fastq.gz
-S20       022         data/98N2022_S20_L001_R1.fastq.gz      data/98N2022_S20_L001_R2.fastq.gz
+S20       98N2022         data/98N2022_S20_L001_R1.fastq.gz      data/98N2022_S20_L001_R2.fastq.gz
 ```
 
-And so, as we continue through our workflow, we will expect to see filenames
-like `trimmed/S32-R1.fastq.gz` or `mapped/S32.bam`
+And thus, as we continue through our workflow, we will expect to see filenames
+like `trimmed/S32-1.fq.gz` or `mapped/S32.bam`
+
+In order to translate requested input files like `S32.1.fq.gz` into 
+the actual file paths for those files, I have saved a tab-delimited 
+file looking like the above three-row table into: `samples.tsv`. 
+
+
 
 ## What should our wildcards look like?
 
 The first thing to note is that `fastqc` seems to operate on single FASTQ files,
 so it will be operating individually on files for each _sample_ and for
-each _read_, so those are very candidates for being wildcards.  
+each _read_, so those are good candidates for being wildcards.  
 
 Now, looking ahead, we also note that in step 6, we want to map
 both the trimmed and the untrimmed reads to the reference genome.
@@ -113,7 +119,7 @@ about which parts of their paths and names we could replace with wildcards!_
 
 ### Outputs from mapping reads to the genome
 
-We could have our mapping results to look something like:
+We could have our mapping results look something like:
 ```
 # mapping the trimmed reads
 results/mapped/trimgalore/S32.bam
@@ -139,7 +145,13 @@ you could put that in the mix by just requesting output files like
 ```
 results/mapped/trimmomatic/{sample}.bam
 ```
-(so, long as you provided a rule that created the trimmomatic output in a consistent way)
+(so, long as you provided a rule that created the trimmomatic output in a consistent way).
+
+Or, if you wanted to map the raw reads, and do so in a consistent
+interface, you could request:
+```
+results/mapped/raw/{sample}.bam
+```
 
 ### Outputs from fastqc
 
@@ -189,14 +201,18 @@ S32.2_val_1.fq.gz
 S32.2.fastq.gz_trimming_report.txt
 ```
 
-Let us plan to put all these outputs in a directory `trimmed/trim_galore`, like this:
+Those carry a bit of extra junk around.  Let's strealine the fastq.gz's
+
+Let us plan to put all these outputs in a directory `trimmed/trim_galore`, and, if necessary, we will move
+the fastq files trim_galore creates to have more streamlined names,
+such as this:
 ```
 # for sample S32, read 1
-trimmed/trim_galore/S32.1_val_1.fq.gz
+trimmed/trim_galore/S32.1.fq.gz
 trimmed/trim_galore/S32.1.fastq.gz_trimming_report.txt
 
 # for sample S32, read 2
-trimmed/trim_galore/S32.2_val_2.fq.gz
+trimmed/trim_galore/S32.2.fq.gz
 trimmed/trim_galore/S32.2.fastq.gz_trimming_report.txt
 ```
 So, the wildcards that we have going on here are `{sample}`, and possibly
@@ -220,21 +236,106 @@ to wildcards in the inputs.
 The important thing to make sure that the logic of your Snakemake workflow works
 is to ensure that the requested inputs (given combinations of wildcards) for each rule
 can be found---either as the outputs of another rule, or from an input function (for example
-one that goes and finds the intput fastqc files given the `{sample}` and `{read}).
+one that goes and finds the input fastqc files given the `{sample}` and `{read}).
 
 Let's start sketching these out starting with the rule for mapping, making
 just a minimal rule (no conda/logs/params, etc. and just echoing what the
 shell command would be.)
 
-As we already saw above, we know that we want the output to be something like:
+As we already saw above, we know that we want the output to be something like: `results/mapped/{trim_status}/{sample}.bam`, so
+a minimal, test-worthy rule block in our Snakefile would look like:
+
 ```yaml
+rule mapping:
+  input:
+    seq_1 = "results/trimmed/{trim_status}/{sample}.1.fq.gz",
+    seq_2 = "results/trimmed/{trim_status}/{sample}.2.fq.gz",
+    genome = "genome/COYE.fa"
   output:
     bam = "results/mapped/{trim_status}/{sample}.bam"
+  shell:
+    "echo bwa mem -t 8 {input.genome} {input.seq_1} {input.seq_2} > {output.bam}"
+
 ```
 
-However, if we do that, we need to be able to specify the input so that it properly
-will pick up the trimmed or the raw reads.  For the trimmed reads, it would be pretty
-easy.
+That rule block is, in fact, included in the Snakefile.
+
+The important thing to note here is that if you request an output
+file named `results/mapped/trim_galore/S32.bam`, then Snakemake
+is first going to notice that such a file name matches the output
+path of the rule `mapping` with the wildcards set like:
+```
+trim_status: trim_galore
+sample: S32
+```
+It then (and this is the crucial part) looks to the `input` block
+of the rule to figure out what input files it needs to generate
+`results/mapped/trim_galore/S32.bam`.  This is where it
+propagates the wildcard values from the output to the input.
+Snakemake says, Hey, the input files I need have _pathnames of this form_:
+```
+seq_1 = "results/trimmed/{trim_status}/{sample}.1.fq.gz",
+seq_2 = "results/trimmed/{trim_status}/{sample}.2.fq.gz",
+genome = "genome/COYE.fa"
+```
+But to find out the actual file names it needs to produce the
+particular file `results/mapped/trim_galore/S32.bam`, Snakemake is smart enough
+to know that it must to substitute values
+in for the wildcards.  
+So, it uses the values for the requested output file:
+```
+trim_status: trim_galore
+sample: S32
+```
+Substituting those in for the wildcard patterns in the input it determines that,
+to create `results/mapped/trim_galore/S32.bam`, it needs the input files:
+```
+seq_1 = "results/trimmed/trim_galore/S32.1.fq.gz",
+seq_2 = "results/trimmed/trim_galore/S32.2.fq.gz",
+genome = "genome/COYE.fa"
+```
+That is the fundamental of wildcard propagation from output to input _within a rule._
+
+The cool thing about Snakemake is that if it finds the files:
+```
+"results/trimmed/trim_galore/S32.1.fq.gz",
+"results/trimmed/trim_galore/S32.2.fq.gz",
+"genome/COYE.fa"
+```
+then it goes ahead and creates `results/mapped/trim_galore/S32.bam` using the rule
+`mapping`.  
+
+If Snakemake does NOT find those files, then it searches through all the other rules to
+see if it can match the input file paths (like `results/trimmed/trim_galore/S32.1.fq.gz`)
+to the output file names of another rule.  
+
+So, in this case, we would need to have a rule called `trim_galore`, let's say, that had
+an output file pattern that could be matched to `results/trimmed/trim_galore/S32.1.fq.gz`
+and `results/trimmed/trim_galore/S32.2.fq.gz`.
+
+Such a rule in "bare-minimum" and "echo-testy" form would look like:
 ```yaml
-
+rule trim_galore:
+  input:
+    fq1 = "results/trimmed/raw/{sample}.1.fq.gz",
+    fq2 = "results/trimmed/raw/{sample}.2.fq.gz"
+  output:
+    "results/trimmed/trim_galore/{sample}.1.fq.gz",
+    "results/trimmed/trim_galore/{sample}.1.fastq.gz_trimming_report.txt",
+    "results/trimmed/trim_galore/{sample}.2.fq.gz",
+    "results/trimmed/trim_galore/{sample}.2.fastq.gz_trimming_report.txt"
+  shell:
+    "touch {output}"
 ```
+Notice how the files `results/trimmed/trim_galore/S32.1.fq.gz` and 
+`results/trimmed/trim_galore/S32.2.fq.gz`, would match the outputs
+```
+results/trimmed/trim_galore/{sample}.1.fq.gz
+results/trimmed/trim_galore/{sample}.2.fq.gz
+```
+when the wildcard value `{sample}` was set to S32.
+
+Aha!  This is how Snakemake is able to start from a desired output file and
+then work _backwards_ to identify the (possible several) different rules that it must
+run in order to generate that output.
+
